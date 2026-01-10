@@ -1,12 +1,12 @@
 
-# 📦 Log Archive Tool
+# Log Archive Tool
 
 A simple command-line utility to compress and archive log files into a timestamped `.tar.gz` file.  
 It helps keep your system logs organized, backed up, and easy to manage.
 
 ---
 
-## 🚀 Features
+## Features
 - Accepts a log directory as an argument.
 - Compresses logs into a `.tar.gz` archive.
 - Stores archives in a dedicated directory (`log_archives/` by default).
@@ -16,12 +16,12 @@ It helps keep your system logs organized, backed up, and easy to manage.
 
 ---
 
-## 📂 Project URL
+## Project URL
 [Log-Archive-Tool on GitHub](https://github.com/shuvo-halder/systems/tree/main/Log-Archive-Tool)
 
 ---
 
-## ⚙️ Installation
+## Installation
 
 Clone the repository:
 ```bash
@@ -41,7 +41,7 @@ sudo mv log-archive /usr/local/bin/
 
 ---
 
-## 🖥️ Usage
+## Usage
 
 Basic usage:
 ```bash
@@ -66,7 +66,7 @@ This will:
 
 ---
 
-## 📌 Optional Arguments
+## Optional Arguments
 You can extend the script to accept more arguments:
 
 ```bash
@@ -79,7 +79,7 @@ log-archive <log-directory> [archive-directory] [retention-days]
 
 ---
 
-## 📝 Example Log Entry
+## Example Log Entry
 ```json
 {
   "timestamp": "2024-08-16 10:06:48",
@@ -89,7 +89,7 @@ log-archive <log-directory> [archive-directory] [retention-days]
 
 ---
 
-## 🔧 Future Improvements
+## Future Improvements
 - Add support for excluding temporary files (`*.tmp`, `*.bak`).
 - Parallel compression using `pigz` for faster performance.
 - Configurable logging format (CSV/JSON).
@@ -97,7 +97,7 @@ log-archive <log-directory> [archive-directory] [retention-days]
 
 ---
 
-## 👨‍💻 Author
+## Author
 **Shuvo Halder**  
 GitHub Profile [(github.com in Bing)](https://www.bing.com/search?q="https%3A%2F%2Fgithub.com%2Fshuvo-halder")
 
