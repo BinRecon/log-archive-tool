@@ -1,18 +1,124 @@
 
-# Log Archive Tool
+# 🗂️ Log Archive Tool (Enhanced Version)
 
-A simple command-line utility to compress and archive log files into a timestamped `.tar.gz` file.  
-It helps keep your system logs organized, backed up, and easy to manage.
+A robust and production-ready Bash script for archiving log files with compression, integrity checks, structured logging, and automated cleanup.
 
 ---
 
-## Features
-- Accepts a log directory as an argument.
-- Compresses logs into a `.tar.gz` archive.
-- Stores archives in a dedicated directory (`log_archives/` by default).
-- Automatically names archives with a timestamp (e.g., `logs_archive_20240816_100648.tar.gz`).
-- Logs every archive creation in `archive_log.json` (structured log format).
-- Optional cleanup of old archives (default: 30 days).
+## 🚀 Features (Current Version)
+
+### ✅ 1. Safe Bash Execution
+
+* Uses strict mode:
+
+  ```bash
+  set -Eeuo pipefail
+  ```
+* Prevents silent failures and undefined variables
+
+---
+
+### 📁 2. Flexible Input
+
+```bash
+./script.sh <log-directory> [archive-directory] [retention-days]
+```
+
+* `log-directory` → مصدر logs
+* `archive-directory` → default: `./log_archives`
+* `retention-days` → default: `30`
+
+---
+
+### 📦 3. Smart Compression
+
+* Uses `pigz` (parallel gzip) if available
+* Falls back to `gzip` automatically
+
+---
+
+### 🗜️ 4. Archive Creation
+
+* Creates timestamped archive:
+
+  ```
+  logs_archive_YYYYMMDD_HHMMSS.tar.gz
+  ```
+
+---
+
+### 🔐 5. Integrity Check (Checksum)
+
+* Generates SHA256 checksum:
+
+  ```
+  archive.tar.gz.sha256
+  ```
+
+---
+
+### 📊 6. Structured Logging (JSONL)
+
+* Logs stored in:
+
+  ```
+  archive_log.jsonl
+  ```
+* Example entry:
+
+```json
+{
+  "timestamp": "2026-05-03T10:00:00Z",
+  "archive": "logs_archive_20260503.tar.gz",
+  "size_bytes": 123456,
+  "checksum_file": "logs_archive_20260503.tar.gz.sha256"
+}
+```
+
+---
+
+### 🧹 7. Automatic Cleanup
+
+* Deletes old archives based on retention:
+
+```bash
+find ... -mtime +<days> -delete
+```
+
+---
+
+### 🛡️ 8. Input Validation
+
+* Ensures log directory exists before execution
+
+---
+
+### ⚡ 9. Cross-Platform Support
+
+* Handles `stat` differences (Linux/macOS)
+
+---
+
+## 📂 Project Structure
+
+```
+.
+├── script.sh
+├── log_archives/
+│   ├── logs_archive_*.tar.gz
+│   ├── logs_archive_*.sha256
+│   └── archive_log.jsonl
+```
+
+---
+
+## 🧪 Usage Example
+
+```bash
+chmod +x script.sh
+
+./script.sh /var/log /backup/logs 15
+```
 
 ---
 
@@ -22,77 +128,6 @@ It helps keep your system logs organized, backed up, and easy to manage.
 * `tar`
 * `gzip` বা `pigz` (optional but recommended)
 * `sha256sum`
-
----
-
-## Installation
-
-Clone the repository:
-```bash
-git clone https://github.com/shuvo-halder/systems.git
-cd systems/Log-Archive-Tool
-```
-
-Make the script executable:
-```bash
-chmod +x log-archive
-```
-
-Move it into your `$PATH` (optional):
-```bash
-sudo mv log-archive /usr/local/bin/
-```
-
----
-
-## Usage
-
-Basic usage:
-```bash
-log-archive <log-directory>
-```
-
-Example:
-```bash
-log-archive /var/log
-```
-
-This will:
-- Create `log_archives/` if it doesn’t exist.
-- Generate a file like:
-  ```
-  logs_archive_20240816_100648.tar.gz
-  ```
-- Append a log entry to:
-  ```
-  log_archives/archive_log.json
-  ```
-
----
-
-## Optional Arguments
-You can extend the script to accept more arguments:
-
-```bash
-log-archive <log-directory> [archive-directory] [retention-days]
-```
-
-- `<log-directory>` → Directory containing logs (required).
-- `[archive-directory]` → Where to store archives (default: `./log_archives`).
-- `[retention-days]` → Delete archives older than N days (default: 30).
-
----
-
-## Example Log Entry
-```json
-{
-    "timestamp": "2026-05-03T10:00:00Z",
-    "archive": "logs_archive_20260503.tar.gz",
-    "size_bytes": 123456,
-    "checksum_file": "logs_archive_20260503.tar.gz.sha256"
-}
-```
-
 ---
 
 ## 🔮 Upcoming Features (Planned Upgrades)
