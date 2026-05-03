@@ -16,8 +16,12 @@ It helps keep your system logs organized, backed up, and easy to manage.
 
 ---
 
-## Project URL
-[Log-Archive-Tool on GitHub](https://github.com/shuvo-halder/systems/tree/main/Log-Archive-Tool)
+## 🔧 Requirements
+
+* `bash`
+* `tar`
+* `gzip` বা `pigz` (optional but recommended)
+* `sha256sum`
 
 ---
 
@@ -82,23 +86,111 @@ log-archive <log-directory> [archive-directory] [retention-days]
 ## Example Log Entry
 ```json
 {
-  "timestamp": "2024-08-16 10:06:48",
-  "archive": "logs_archive_20240816_100648.tar.gz"
+    "timestamp": "2026-05-03T10:00:00Z",
+    "archive": "logs_archive_20260503.tar.gz",
+    "size_bytes": 123456,
+    "checksum_file": "logs_archive_20260503.tar.gz.sha256"
 }
 ```
 
 ---
 
-## Future Improvements
-- Add support for excluding temporary files (`*.tmp`, `*.bak`).
-- Parallel compression using `pigz` for faster performance.
-- Configurable logging format (CSV/JSON).
-- Systemd timer integration for scheduled archiving.
+## 🔮 Upcoming Features (Planned Upgrades)
+
+### 🔒 Security
+
+* [ ] GPG encryption (`.tar.gz.gpg`)
+* [ ] Password / key-based encryption
+
+---
+
+### ☁️ Remote Backup
+
+* [ ] AWS S3 upload
+* [ ] SCP / Rsync backup server sync
+* [ ] Multi-destination backup
+
+---
+
+### 📊 Observability
+
+* [ ] Hostname tracking
+* [ ] Detailed metrics (duration, compression ratio)
+* [ ] Prometheus exporter (advanced)
+
+---
+
+### 🔔 Alerting
+
+* [ ] Telegram notification
+* [ ] Slack webhook integration
+* [ ] Email alerts
+
+---
+
+### ⚙️ Config Management
+
+* [ ] `.env` or config file support
+* [ ] CLI flags (`--retention`, `--encrypt`, etc.)
+
+---
+
+### 🧠 Smart Backup
+
+* [ ] Incremental backups (`.snar`)
+* [ ] Differential backup strategy
+
+---
+
+### 🧹 Advanced Cleanup
+
+* [ ] Max archive count limit
+* [ ] Max disk usage threshold
+
+---
+
+### 🧪 Reliability
+
+* [ ] Archive verification (`tar -tzf`)
+* [ ] Retry mechanism on failure
+
+---
+
+### ⏱️ Scheduling & Safety
+
+* [ ] Cron-ready setup guide
+* [ ] Lock file (prevent duplicate runs)
+
+---
+
+### 🧰 Developer Experience
+
+* [ ] Dry-run mode
+* [ ] Debug/verbose mode
+* [ ] Colored CLI output
+
+---
+
+## 🧠 Future Vision
+
+This tool can evolve into:
+
+* A **lightweight backup agent**
+* A **DevOps log retention system**
+* Or a **centralized backup service (with API + dashboard)**
+
+---
+
+## 🤝 Contribution Ideas
+
+* Convert to Go for better performance
+* Add REST API
+* Add web dashboard
+* Dockerize the tool
 
 ---
 
 ## Author
 **Shuvo Halder**  
 GitHub Profile [(github.com in Bing)](https://www.bing.com/search?q="https%3A%2F%2Fgithub.com%2Fshuvo-halder")
-Project URL [(Project URL)](https://roadmap.sh/projects/log-archive-tool)
 
