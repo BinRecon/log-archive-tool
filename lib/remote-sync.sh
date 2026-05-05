@@ -1,119 +1,96 @@
 #!/usr/bin/env bash
-################################################################################
 # Remote Sync Library for Log Archive Tool
-# Supports SCP and Rsync with production-grade error handling, retries, and validation
-################################################################################
+# Provides reusable functions for SCP/Rsync operations
+# Author: Shuvo Halder
+# License: MIT
 
 set -Eeuo pipefail
 
 # Configuration
-readonly REMOTE_SYNC_VERSION="1.0.0"
-readonly REMOTE_SYNC_TIMEOUT=3600  # 1 hour default timeout
-readonly REMOTE_SYNC_RETRIES=3
-readonly REMOTE_SYNC_RETRY_DELAY=5  # seconds
+readonly REMOTE_SYNC_TIMEOUT="${REMOTE_SYNC_TIMEOUT:-3600}"
+readonly REMOTE_SYNC_DEBUG="${REMOTE_SYNC_DEBUG:-0}"
+readonly MAX_RETRIES="${MAX_RETRIES:-3}"
+readonly RETRY_DELAY="${RETRY_DELAY:-5}"
 
-# Logging utilities
-remote_sync_log() {
+# ========== LOGGING FUNCTIONS ==========
+
+_remote_sync_log() {
     local level="$1"
     shift
-    local message="$@"
+    local message="$*"
     local timestamp
-    timestamp=$(date -Iseconds)
-    printf '[%s] [%s] %s\n' "$timestamp" "$level" "$message" >&2
-}
-
-remote_sync_info() {
-    remote_sync_log "INFO" "$@"
-}
-
-remote_sync_warn() {
-    remote_sync_log "WARN" "$@"
-}
-
-remote_sync_error() {
-    remote_sync_log "ERROR" "$@"
+    timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
+    echo "[$timestamp] [$level] $message" >&2
 }
 
 remote_sync_debug() {
-    if [[ "${REMOTE_SYNC_DEBUG:-0}" == "1" ]]; then
-        remote_sync_log "DEBUG" "$@"
-    fi
+    [[ "$REMOTE_SYNC_DEBUG" == "1" ]] && _remote_sync_log "DEBUG" "$@"
 }
 
-################################################################################
-# Validate remote configuration
-################################################################################
-validate_remote_config() {
-    local host="$1"
-    local user="$2"
-    local path="$3"
-    local port="${4:-22}"
-    
-    if [[ -z "$host" ]] || [[ -z "$user" ]] || [[ -z "$path" ]]; then
-        remote_sync_error "Invalid remote config: host='$host', user='$user', path='$path'"
-        return 1
-    fi
-    
-    # Validate SSH key or password auth is available
-    if ! command -v ssh >/dev/null 2>&1; then
-        remote_sync_error "SSH not found. Required for remote sync operations."
-        return 1
-    fi
-    
-    remote_sync_debug "Remote config validated: $user@$host:$path (port: $port)"
-    return 0
+remote_sync_info() {
+    _remote_sync_log "INFO" "$@"
 }
 
-################################################################################
-# Test SSH connectivity
-################################################################################
-test_ssh_connection() {
+remote_sync_warn() {
+    _remote_sync_log "WARN" "$@"
+}
+
+remote_sync_error() {
+    _remote_sync_log "ERROR" "$@"
+}
+
+# ========== VALIDATION FUNCTIONS ==========
+
+validate_ssh_host() {
     local host="$1"
     local user="$2"
     local port="${3:-22}"
-    local timeout="${4:-10}"
+    local key="${4:-}"
     
-    remote_sync_info "Testing SSH connection to $user@$host:$port..."
+    local ssh_opts="-o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
     
-    if ssh -o ConnectTimeout="$timeout" \
-           -o StrictHostKeyChecking=no \
-           -o UserKnownHostsFile=/dev/null \
-           -p "$port" \
-           "$user@$host" \
-           "echo 'SSH connection successful'" >/dev/null 2>&1; then
-        remote_sync_info "SSH connection test passed"
+    if [[ -n "$key" ]]; then
+        ssh_opts="$ssh_opts -i $key"
+    fi
+    
+    remote_sync_debug "Testing SSH connection: $user@$host:$port"
+    
+    # shellcheck disable=SC2086
+    if ssh -p "$port" $ssh_opts "$user@$host" "echo 'SSH OK'" &> /dev/null; then
+        remote_sync_info "SSH connection validated"
         return 0
     else
-        remote_sync_error "SSH connection test failed to $user@$host:$port"
+        remote_sync_error "SSH connection failed to $user@$host:$port"
         return 1
     fi
 }
 
-################################################################################
-# Check remote directory existence and permissions
-################################################################################
-check_remote_directory() {
+validate_remote_directory() {
     local host="$1"
     local user="$2"
     local path="$3"
     local port="${4:-22}"
+    local key="${5:-}"
     
-    remote_sync_info "Checking remote directory: $path"
+    local ssh_opts="-o ConnectTimeout=10 -o BatchMode=yes"
     
-    if ssh -o ConnectTimeout=10 \
-           -p "$port" \
-           "$user@$host" \
-           "[[ -d '$path' && -w '$path' ]]" >/dev/null 2>&1; then
-        remote_sync_info "Remote directory is accessible and writable"
+    if [[ -n "$key" ]]; then
+        ssh_opts="$ssh_opts -i $key"
+    fi
+    
+    remote_sync_debug "Validating remote directory: $path on $host"
+    
+    # shellcheck disable=SC2086
+    if ssh -p "$port" $ssh_opts "$user@$host" "[[ -d $path ]]" 2>/dev/null; then
+        remote_sync_info "Remote directory validated: $path"
         return 0
     else
-        remote_sync_warn "Remote directory check failed. Attempting to create..."
+        remote_sync_warn "Remote directory does not exist: $path (will attempt to create)"
         
-        if ssh -o ConnectTimeout=10 \
-               -p "$port" \
-               "$user@$host" \
-               "mkdir -p '$path'" >/dev/null 2>&1; then
-            remote_sync_info "Remote directory created successfully"
+        # Try to create directory
+        # shellcheck disable=SC2086
+        if ssh -p "$port" $ssh_opts "$user@$host" "mkdir -p $path" 2>/dev/null; then
+            remote_sync_info "Remote directory created: $path"
             return 0
         else
             remote_sync_error "Failed to create remote directory: $path"
@@ -122,337 +99,280 @@ check_remote_directory() {
     fi
 }
 
-################################################################################
-# Get remote disk space info
-################################################################################
-get_remote_disk_space() {
+check_remote_disk_space() {
     local host="$1"
     local user="$2"
     local path="$3"
-    local port="${4:-22}"
+    local required_gb="${4:-1}"
+    local port="${5:-22}"
+    local key="${6:-}"
     
-    ssh -o ConnectTimeout=10 \
-        -p "$port" \
-        "$user@$host" \
-        "df -B1 '$path' | awk 'NR==2 {print \$3, \$4, \$2}'" 2>/dev/null || echo ""
+    local ssh_opts="-o ConnectTimeout=10 -o BatchMode=yes"
+    
+    if [[ -n "$key" ]]; then
+        ssh_opts="$ssh_opts -i $key"
+    fi
+    
+    remote_sync_debug "Checking remote disk space on $host:$path"
+    
+    # shellcheck disable=SC2086
+    local available_gb
+    available_gb=$(ssh -p "$port" $ssh_opts "$user@$host" \
+        "df -B 1G \"$path\" 2>/dev/null | awk 'NR==2 {print \$4}' || echo 0" 2>/dev/null) || available_gb=0
+    
+    if (( available_gb >= required_gb )); then
+        remote_sync_info "Disk space check passed: ${available_gb}GB available (required: ${required_gb}GB)"
+        return 0
+    else
+        remote_sync_error "Insufficient disk space: ${available_gb}GB available (required: ${required_gb}GB)"
+        return 1
+    fi
 }
 
-################################################################################
-# Sync with SCP (simple, secure copy)
-################################################################################
-sync_with_scp() {
+# ========== FILE VERIFICATION ==========
+
+verify_remote_checksum() {
+    local host="$1"
+    local user="$2"
+    local remote_path="$3"
+    local archive_file="$4"
+    local local_checksum="$5"
+    local port="${6:-22}"
+    local key="${7:-}"
+    
+    local ssh_opts="-o ConnectTimeout=10 -o BatchMode=yes"
+    
+    if [[ -n "$key" ]]; then
+        ssh_opts="$ssh_opts -i $key"
+    fi
+    
+    remote_sync_debug "Verifying remote checksum for $archive_file"
+    
+    # shellcheck disable=SC2086
+    local remote_checksum
+    remote_checksum=$(ssh -p "$port" $ssh_opts "$user@$host" \
+        "sha256sum $remote_path/$archive_file 2>/dev/null | awk '{print \$1}' || echo 'NOT_FOUND'" 2>/dev/null) || remote_checksum="ERROR"
+    
+    if [[ "$local_checksum" == "$remote_checksum" ]]; then
+        remote_sync_info "Checksum verified: $archive_file"
+        return 0
+    else
+        remote_sync_error "Checksum mismatch for $archive_file"
+        remote_sync_error "Local: $local_checksum"
+        remote_sync_error "Remote: $remote_checksum"
+        return 1
+    fi
+}
+
+# ========== RSYNC OPERATIONS ==========
+
+rsync_transfer() {
     local local_file="$1"
     local host="$2"
     local user="$3"
     local remote_path="$4"
     local port="${5:-22}"
-    local retry_count=0
+    local key="${6:-}"
     
-    if [[ ! -f "$local_file" ]]; then
-        remote_sync_error "Local file not found: $local_file"
-        return 1
+    local rsync_opts="-av --checksum --progress --timeout=300"
+    local ssh_opts="-e \"ssh -p $port"
+    
+    if [[ -n "$key" ]]; then
+        ssh_opts="$ssh_opts -i $key"
     fi
     
-    local file_size
-    file_size=$(stat -c%s "$local_file" 2>/dev/null || stat -f%z "$local_file")
-    remote_sync_info "Starting SCP transfer: $local_file ($file_size bytes) → $user@$host:$remote_path"
+    ssh_opts="$ssh_opts -o BatchMode=yes -o StrictHostKeyChecking=accept-new\""
     
-    while (( retry_count < REMOTE_SYNC_RETRIES )); do
-        remote_sync_debug "SCP attempt $((retry_count + 1))/$REMOTE_SYNC_RETRIES"
+    remote_sync_debug "Starting Rsync transfer: $local_file"
+    
+    local attempt=1
+    while (( attempt <= MAX_RETRIES )); do
+        remote_sync_info "Rsync attempt $attempt/$MAX_RETRIES"
         
-        if scp -P "$port" \
-               -o ConnectTimeout=30 \
-               -o BatchMode=yes \
-               "$local_file" \
-               "$user@$host:$remote_path" 2>/dev/null; then
-            
-            remote_sync_info "SCP transfer completed successfully"
+        # shellcheck disable=SC2086
+        if rsync $rsync_opts $ssh_opts "$local_file" "$user@$host:$remote_path/" 2>&1; then
+            remote_sync_info "Rsync transfer completed successfully"
             return 0
+        else
+            remote_sync_warn "Rsync transfer failed (attempt $attempt/$MAX_RETRIES)"
+            
+            if (( attempt < MAX_RETRIES )); then
+                remote_sync_info "Retrying in ${RETRY_DELAY}s..."
+                sleep "$RETRY_DELAY"
+            fi
         fi
         
-        (( retry_count++ ))
-        if (( retry_count < REMOTE_SYNC_RETRIES )); then
-            remote_sync_warn "SCP transfer failed. Retrying in ${REMOTE_SYNC_RETRY_DELAY}s..."
-            sleep "$REMOTE_SYNC_RETRY_DELAY"
-        fi
+        (( attempt++ ))
     done
     
-    remote_sync_error "SCP transfer failed after $REMOTE_SYNC_RETRIES attempts"
+    remote_sync_error "Rsync transfer failed after $MAX_RETRIES attempts"
     return 1
 }
 
-################################################################################
-# Sync with Rsync (efficient, resumable)
-################################################################################
-sync_with_rsync() {
-    local local_path="$1"
+# ========== SCP OPERATIONS ==========
+
+scp_transfer() {
+    local local_file="$1"
     local host="$2"
     local user="$3"
     local remote_path="$4"
     local port="${5:-22}"
-    local retry_count=0
+    local key="${6:-}"
     
-    if [[ ! -e "$local_path" ]]; then
-        remote_sync_error "Local path not found: $local_path"
-        return 1
+    local scp_opts="-p -P $port"
+    
+    if [[ -n "$key" ]]; then
+        scp_opts="$scp_opts -i $key"
     fi
     
-    # Check if rsync is available
-    if ! command -v rsync >/dev/null 2>&1; then
-        remote_sync_error "rsync not found. Install rsync to use this sync method."
-        return 1
-    fi
+    remote_sync_debug "Starting SCP transfer: $local_file"
     
-    remote_sync_info "Starting Rsync transfer: $local_path → $user@$host:$remote_path"
-    
-    local rsync_opts=(
-        "--archive"                    # Preserve permissions, times, ownership
-        "--verbose"                    # Verbose output
-        "--progress"                   # Show progress
-        "--partial"                    # Keep partial transfers (resumable)
-        "--inplace"                    # Write files in-place
-        "--timeout=300"                # 5 minute I/O timeout
-        "--rsh=ssh -p $port -o ConnectTimeout=30"
-        "--delete"                     # Delete extraneous files on remote
-        "--exclude=.git"               # Exclude git directories
-        "--compress"                   # Compress during transfer
-    )
-    
-    while (( retry_count < REMOTE_SYNC_RETRIES )); do
-        remote_sync_debug "Rsync attempt $((retry_count + 1))/$REMOTE_SYNC_RETRIES"
+    local attempt=1
+    while (( attempt <= MAX_RETRIES )); do
+        remote_sync_info "SCP attempt $attempt/$MAX_RETRIES"
         
-        # Use rsync with retry logic
-        if rsync "${rsync_opts[@]}" \
-                 "$local_path" \
-                 "$user@$host:$remote_path" 2>/dev/null; then
-            
-            remote_sync_info "Rsync transfer completed successfully"
+        # shellcheck disable=SC2086
+        if scp $scp_opts "$local_file" "$user@$host:$remote_path/" 2>&1; then
+            remote_sync_info "SCP transfer completed successfully"
             return 0
+        else
+            remote_sync_warn "SCP transfer failed (attempt $attempt/$MAX_RETRIES)"
+            
+            if (( attempt < MAX_RETRIES )); then
+                remote_sync_info "Retrying in ${RETRY_DELAY}s..."
+                sleep "$RETRY_DELAY"
+            fi
         fi
         
-        local exit_code=$?
-        (( retry_count++ ))
-        
-        # Rsync exit codes: 0=success, 1-2=transient, 3-4=fatal
-        if (( exit_code >= 3 )); then
-            remote_sync_error "Rsync fatal error (exit code: $exit_code)"
-            return 1
-        fi
-        
-        if (( retry_count < REMOTE_SYNC_RETRIES )); then
-            remote_sync_warn "Rsync transfer failed. Retrying in ${REMOTE_SYNC_RETRY_DELAY}s..."
-            sleep "$REMOTE_SYNC_RETRY_DELAY"
-        fi
+        (( attempt++ ))
     done
     
-    remote_sync_error "Rsync transfer failed after $REMOTE_SYNC_RETRIES attempts"
+    remote_sync_error "SCP transfer failed after $MAX_RETRIES attempts"
     return 1
 }
 
-################################################################################
-# Verify remote file integrity (checksum)
-################################################################################
-verify_remote_file() {
-    local host="$1"
-    local user="$2"
-    local remote_file="$3"
-    local local_checksum="$4"
-    local port="${5:-22}"
-    
-    remote_sync_info "Verifying remote file integrity: $remote_file"
-    
-    local remote_checksum
-    remote_checksum=$(ssh -o ConnectTimeout=10 \
-                         -p "$port" \
-                         "$user@$host" \
-                         "sha256sum '$remote_file' 2>/dev/null | cut -d' ' -f1" || echo "")
-    
-    if [[ -z "$remote_checksum" ]]; then
-        remote_sync_warn "Could not verify remote checksum"
-        return 1
-    fi
-    
-    if [[ "$local_checksum" == "$remote_checksum" ]]; then
-        remote_sync_info "Checksum verification passed"
-        return 0
-    else
-        remote_sync_error "Checksum mismatch! Local: $local_checksum, Remote: $remote_checksum"
-        return 1
-    fi
-}
+# ========== COMBINED OPERATIONS ==========
 
-################################################################################
-# Cleanup old remote backups based on retention
-################################################################################
-cleanup_remote_backups() {
-    local host="$1"
-    local user="$2"
-    local remote_path="$3"
-    local retention_days="$4"
-    local port="${5:-22}"
-    
-    remote_sync_info "Cleaning up remote backups older than $retention_days days"
-    
-    ssh -o ConnectTimeout=10 \
-        -p "$port" \
-        "$user@$host" \
-        "find '$remote_path' -maxdepth 1 -type f -name '*.tar.gz' -mtime +$retention_days -delete" 2>/dev/null || {
-        remote_sync_warn "Could not cleanup old remote backups"
-        return 1
-    }
-    
-    remote_sync_info "Remote cleanup completed"
-    return 0
-}
-
-################################################################################
-# Get remote backup listing with sizes
-################################################################################
-list_remote_backups() {
-    local host="$1"
-    local user="$2"
-    local remote_path="$3"
-    local port="${4:-22}"
-    
-    remote_sync_info "Fetching remote backup listing from $user@$host:$remote_path"
-    
-    ssh -o ConnectTimeout=10 \
-        -p "$port" \
-        "$user@$host" \
-        "ls -lh '$remote_path'/*.tar.gz 2>/dev/null | awk '{print \$9, \$5}'" || echo ""
-}
-
-################################################################################
-# Main sync orchestration function
-################################################################################
-sync_archive_to_remote() {
+rsync_backup() {
     local archive_file="$1"
-    local method="${2:-rsync}"  # rsync or scp
+    local checksum_file="$2"
     local host="$3"
     local user="$4"
     local remote_path="$5"
     local port="${6:-22}"
-    local checksum_file="${7:-}"
+    local key="${7:-}"
     
-    if [[ ! -f "$archive_file" ]]; then
-        remote_sync_error "Archive file not found: $archive_file"
+    remote_sync_info "Starting Rsync backup: $archive_file"
+    
+    # Validate connection
+    if ! validate_ssh_host "$host" "$user" "$port" "$key"; then
         return 1
     fi
     
-    # Validate input
-    if ! validate_remote_config "$host" "$user" "$remote_path" "$port"; then
+    # Validate remote directory
+    if ! validate_remote_directory "$host" "$user" "$remote_path" "$port" "$key"; then
         return 1
     fi
     
-    # Test connection
-    if ! test_ssh_connection "$host" "$user" "$port"; then
+    # Get file size in GB (rough estimate)
+    local size_gb
+    size_gb=$(( $(stat -c%s "$archive_file" 2>/dev/null || stat -f%z "$archive_file") / 1073741824 + 1 ))
+    
+    # Check disk space
+    if ! check_remote_disk_space "$host" "$user" "$remote_path" "$size_gb" "$port" "$key"; then
         return 1
     fi
     
-    # Check remote directory
-    if ! check_remote_directory "$host" "$user" "$remote_path" "$port"; then
+    # Transfer archive
+    if ! rsync_transfer "$archive_file" "$host" "$user" "$remote_path" "$port" "$key"; then
         return 1
     fi
     
-    # Check available space
-    local disk_info
-    disk_info=$(get_remote_disk_space "$host" "$user" "$remote_path" "$port")
-    if [[ -n "$disk_info" ]]; then
-        local used free total
-        read -r used free total <<< "$disk_info"
-        local free_gb=$((free / 1024 / 1024 / 1024))
-        remote_sync_info "Remote disk space available: ${free_gb}GB"
+    # Transfer checksum
+    if ! rsync_transfer "$checksum_file" "$host" "$user" "$remote_path" "$port" "$key"; then
+        remote_sync_warn "Failed to transfer checksum file"
     fi
     
-    # Perform sync
-    local sync_start
-    sync_start=$(date +%s)
-    
-    case "$method" in
-        scp)
-            if ! sync_with_scp "$archive_file" "$host" "$user" "$remote_path" "$port"; then
-                return 1
-            fi
-            ;;
-        rsync)
-            if ! sync_with_rsync "$archive_file" "$host" "$user" "$remote_path" "$port"; then
-                return 1
-            fi
-            ;;
-        *)
-            remote_sync_error "Unknown sync method: $method"
-            return 1
-            ;;
-    esac
-    
-    local sync_end
-    sync_end=$(date +%s)
-    local sync_duration=$((sync_end - sync_start))
-    
-    remote_sync_info "Sync completed in ${sync_duration}s using $method"
-    
-    # Verify if checksum provided
-    if [[ -n "$checksum_file" ]] && [[ -f "$checksum_file" ]]; then
-        local local_checksum
-        local_checksum=$(cut -d' ' -f1 "$checksum_file")
-        
-        local remote_file
-        remote_file="$remote_path/$(basename "$archive_file")"
-        
-        if ! verify_remote_file "$host" "$user" "$remote_file" "$local_checksum" "$port"; then
-            remote_sync_warn "File verification failed but upload completed"
-        fi
-    fi
-    
+    remote_sync_info "Rsync backup completed successfully"
     return 0
 }
 
-################################################################################
-# Generate remote sync JSON log entry
-################################################################################
-log_remote_sync_event() {
-    local archive_name="$1"
-    local method="$2"
+scp_backup() {
+    local archive_file="$1"
+    local checksum_file="$2"
     local host="$3"
     local user="$4"
-    local status="${5:-success}"
-    local duration="${6:-0}"
-    local error_msg="${7:-}"
+    local remote_path="$5"
+    local port="${6:-22}"
+    local key="${7:-}"
     
-    local timestamp
-    timestamp=$(date -Iseconds)
+    remote_sync_info "Starting SCP backup: $archive_file"
     
-    local log_entry
-    log_entry=$(printf '{
-        "timestamp":"%s",
-        "archive":"%s",
-        "sync_method":"%s",
-        "remote_host":"%s",
-        "remote_user":"%s",
-        "status":"%s",
-        "duration_seconds":%s' \
-        "$timestamp" "$archive_name" "$method" "$host" "$user" "$status" "$duration")
-    
-    if [[ -n "$error_msg" ]]; then
-        log_entry=$(printf '%s,
-        "error":"%s"' "$log_entry" "$error_msg")
+    # Validate connection
+    if ! validate_ssh_host "$host" "$user" "$port" "$key"; then
+        return 1
     fi
     
-    log_entry=$(printf '%s
-    }' "$log_entry")
+    # Validate remote directory
+    if ! validate_remote_directory "$host" "$user" "$remote_path" "$port" "$key"; then
+        return 1
+    fi
     
-    echo "$log_entry"
+    # Get file size in GB
+    local size_gb
+    size_gb=$(( $(stat -c%s "$archive_file" 2>/dev/null || stat -f%z "$archive_file") / 1073741824 + 1 ))
+    
+    # Check disk space
+    if ! check_remote_disk_space "$host" "$user" "$remote_path" "$size_gb" "$port" "$key"; then
+        return 1
+    fi
+    
+    # Transfer archive
+    if ! scp_transfer "$archive_file" "$host" "$user" "$remote_path" "$port" "$key"; then
+        return 1
+    fi
+    
+    # Transfer checksum
+    if ! scp_transfer "$checksum_file" "$host" "$user" "$remote_path" "$port" "$key"; then
+        remote_sync_warn "Failed to transfer checksum file"
+    fi
+    
+    remote_sync_info "SCP backup completed successfully"
+    return 0
 }
 
-################################################################################
-# Export functions for use by main script
-################################################################################
-export -f remote_sync_info
-export -f remote_sync_warn
-export -f remote_sync_error
-export -f remote_sync_debug
-export -f validate_remote_config
-export -f test_ssh_connection
-export -f check_remote_directory
-export -f sync_archive_to_remote
-export -f log_remote_sync_event
+# ========== CLEANUP OPERATIONS ==========
+
+cleanup_remote_archives() {
+    local host="$1"
+    local user="$2"
+    local remote_path="$3"
+    local retention_days="${4:-30}"
+    local port="${5:-22}"
+    local key="${6:-}"
+    
+    local ssh_opts="-o ConnectTimeout=10 -o BatchMode=yes"
+    
+    if [[ -n "$key" ]]; then
+        ssh_opts="$ssh_opts -i $key"
+    fi
+    
+    remote_sync_info "Cleaning up remote archives older than $retention_days days"
+    
+    # shellcheck disable=SC2086
+    if ssh -p "$port" $ssh_opts "$user@$host" \
+        "find $remote_path -type f \\( -name '*.tar.gz' -o -name '*.tar.gz.sha256' \\) -mtime +$retention_days -delete" 2>/dev/null; then
+        
+        remote_sync_info "Remote cleanup completed"
+        return 0
+    else
+        remote_sync_warn "Remote cleanup may have failed or nothing to delete"
+        return 1
+    fi
+}
+
+# Export functions for use in other scripts
+export -f remote_sync_debug remote_sync_info remote_sync_warn remote_sync_error
+export -f validate_ssh_host validate_remote_directory check_remote_disk_space
+export -f verify_remote_checksum rsync_transfer scp_transfer
+export -f rsync_backup scp_backup cleanup_remote_archives
