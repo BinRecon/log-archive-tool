@@ -142,7 +142,7 @@ chmod +x script.sh
 ### ☁️ Remote Backup
 
 * [ ] AWS S3 upload
-~~ * [ ] SCP / Rsync backup server sync ~~
+* [x] SCP / Rsync backup server sync
 * [ ] Multi-destination backup
 
 ---
