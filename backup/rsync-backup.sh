@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Example: Rsync Backup Configuration
 # This script demonstrates production-grade Rsync backup setup
-# Usage: ./examples/rsync-backup.sh
+# Usage: ./backup/rsync-backup.sh
 
 set -Eeuo pipefail
 
